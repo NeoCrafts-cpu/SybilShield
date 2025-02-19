@@ -1,0 +1,33 @@
+# ============================================================================
+# SybilShield - Render Deployment Configuration
+# ============================================================================
+
+services:
+  # Relayer (Express.js backend)
+  - type: web
+    name: sybilshield-relayer
+    runtime: node
+    region: oregon
+    plan: free
+    rootDir: relayer
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: DEMO_MODE
+        value: "true"
+      - key: ALEO_RPC_URL
+        value: "https://api.explorer.provable.com/v1"
+      - key: ISSUER_PRIVATE_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: ISSUER_ADDRESS
+        sync: false  # Set manually in Render dashboard
+      - key: CORS_ORIGINS
+        value: "https://sybilshield.vercel.app,https://sybil-sheild.vercel.app,http://localhost:3000"
+      - key: LOG_LEVEL
+        value: "info"
+      - key: JWT_SECRET
+        generateValue: true

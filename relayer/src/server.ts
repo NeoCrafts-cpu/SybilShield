@@ -52,10 +52,18 @@ export const createApp = (): Express => {
         return;
       }
       
+      // Always allow configured origins
       if (config.security.corsOrigins.includes(origin)) {
         callback(null, true);
       } else if (config.server.isDevelopment) {
         // Allow all origins in development
+        callback(null, true);
+      } else if (
+        origin.endsWith('.onrender.com') ||
+        origin.endsWith('.vercel.app') ||
+        origin.startsWith('http://localhost')
+      ) {
+        // Allow Render, Vercel, and localhost in production
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));

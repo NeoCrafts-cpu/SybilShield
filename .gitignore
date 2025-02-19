@@ -202,3 +202,4 @@ docs/_build/
 
 # Husky
 .husky/_/
+.github/workflows/ci.yml
