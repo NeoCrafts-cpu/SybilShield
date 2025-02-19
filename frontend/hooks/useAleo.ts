@@ -20,7 +20,8 @@ export const DEPLOY_TX_ID = 'at10376kkr45n7k6pat7jt2g9knsy7wv4uyvs59glz0j2239snx
 export const ALEO_NETWORK = 'testnetbeta';
 
 // Fee in microcredits (1 credit = 1,000,000 microcredits)
-export const DEFAULT_FEE = 100_000; // 0.1 credits
+export const DEFAULT_FEE = 500_000; // 0.5 credits
+export const RECORD_TX_FEE = 1_500_000; // 1.5 credits for txs that produce records + finalize
 
 // ============================================================================
 // Types
@@ -229,15 +230,20 @@ export function useAleo() {
       // Badge expires in 1 year (~31.5M blocks at 1 block/sec)
       const expiresAt = currentHeight + 31536000;
 
+      // Ensure proof hash has field suffix
+      const proof = proofHash || generateFieldValue();
+      const proofField = proof.endsWith('field') ? proof : `${proof}field`;
+
       const transaction = createTransaction(
         publicKey,
         SYBILSHIELD_PROGRAM_ID,
         'issue_badge',
         [
           recipient,
-          proofHash || generateFieldValue(),
+          proofField,
           `${expiresAt}u32`,
-        ]
+        ],
+        RECORD_TX_FEE
       );
 
       const txId = await requestTransaction(transaction);
@@ -300,11 +306,14 @@ export function useAleo() {
     setError(null);
 
     try {
+      // Ensure nonce has field suffix
+      const nonceField = badgeNonce.endsWith('field') ? badgeNonce : `${badgeNonce}field`;
+
       const transaction = createTransaction(
         publicKey,
         SYBILSHIELD_PROGRAM_ID,
         'revoke_badge',
-        [badgeNonce]
+        [nonceField]
       );
 
       const txId = await requestTransaction(transaction);
@@ -359,7 +368,8 @@ export function useAleo() {
           descHash,
           `${durationBlocks}u32`,
           nonceField,
-        ]
+        ],
+        RECORD_TX_FEE
       );
 
       const txId = await requestTransaction(transaction);
@@ -406,7 +416,8 @@ export function useAleo() {
           nonceField,
           `${badgeExpiresAt}u32`,
           voteChoice.toString(),
-        ]
+        ],
+        RECORD_TX_FEE
       );
 
       const txId = await requestTransaction(transaction);

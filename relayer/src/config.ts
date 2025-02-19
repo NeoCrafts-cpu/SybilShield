@@ -22,7 +22,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
 
   // Aleo Blockchain
-  ALEO_RPC_URL: z.string().url().default('https://api.explorer.provable.com/v2'),
+  ALEO_RPC_URL: z.string().url().default('https://api.explorer.provable.com/v1'),
   ISSUER_PRIVATE_KEY: z.string().min(1, 'ISSUER_PRIVATE_KEY is required'),
   ISSUER_ADDRESS: z.string().optional(),
 

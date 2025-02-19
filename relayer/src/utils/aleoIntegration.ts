@@ -3,6 +3,7 @@
 // ============================================================================
 // Utilities for interacting with the Aleo blockchain
 // Handles badge issuance transactions via the deployed sybilshield_aio_v2.aleo contract
+// Supports snarkos CLI execution with HTTP API fallback for read operations
 // ============================================================================
 
 import { exec } from 'child_process';
@@ -11,6 +12,9 @@ import config from '../config.js';
 import { logger } from './logger.js';
 
 const execAsync = promisify(exec);
+
+// Cache snarkos availability check
+let snarkosAvailable: boolean | null = null;
 
 // ============================================================================
 // Types
@@ -31,6 +35,23 @@ export interface ContractCallResult {
 }
 
 // ============================================================================
+// Snarkos Availability Check
+// ============================================================================
+
+async function isSnarkosAvailable(): Promise<boolean> {
+  if (snarkosAvailable !== null) return snarkosAvailable;
+  try {
+    await execAsync('snarkos --version', { timeout: 5000 });
+    snarkosAvailable = true;
+    logger.info('[Aleo] snarkos CLI is available');
+  } catch {
+    snarkosAvailable = false;
+    logger.warn('[Aleo] snarkos CLI not found. On-chain transactions require snarkos.');
+  }
+  return snarkosAvailable;
+}
+
+// ============================================================================
 // Aleo CLI Wrapper
 // ============================================================================
 
@@ -38,10 +59,21 @@ export interface ContractCallResult {
  * Execute an Aleo CLI command
  */
 async function executeAleoCli(command: string): Promise<ContractCallResult> {
+  const available = await isSnarkosAvailable();
+  if (!available) {
+    return {
+      success: false,
+      error: 'snarkos CLI is not installed. Install with: curl -sSf https://install.provable.com/aleo | sh',
+    };
+  }
+
   try {
-    logger.info(`[Aleo] Executing: ${command}`);
+    // Sanitize log output - don't log private keys
+    const sanitizedCmd = command.replace(/--private-key\s+\S+/, '--private-key [REDACTED]');
+    logger.info(`[Aleo] Executing: ${sanitizedCmd}`);
+    
     const { stdout, stderr } = await execAsync(command, {
-      timeout: 120000, // 2 minute timeout for transactions
+      timeout: 180000, // 3 minute timeout for transactions
       env: {
         ...process.env,
         ALEO_PRIVATE_KEY: config.aleo.issuerPrivateKey,
@@ -52,7 +84,7 @@ async function executeAleoCli(command: string): Promise<ContractCallResult> {
       logger.warn(`[Aleo] stderr: ${stderr}`);
     }
 
-    logger.info(`[Aleo] Output: ${stdout}`);
+    logger.info(`[Aleo] Output: ${stdout.slice(0, 500)}`);
 
     // Extract transaction ID from output
     const txMatch = stdout.match(/at1[a-z0-9]{58}/);
@@ -70,6 +102,40 @@ async function executeAleoCli(command: string): Promise<ContractCallResult> {
       success: false,
       error: errorMessage,
     };
+  }
+}
+
+// ============================================================================
+// HTTP API Helpers
+// ============================================================================
+
+/**
+ * Get the base REST API URL for Aleo network queries
+ */
+function getApiBaseUrl(): string {
+  const rpcUrl = config.aleo.rpcUrl;
+  // Ensure URL ends with /v1 format for the explorer API
+  if (rpcUrl.includes('/v1')) {
+    return `${rpcUrl}/testnet`;
+  }
+  return `${rpcUrl.replace(/\/+$/, '')}/testnet`;
+}
+
+/**
+ * Query a mapping value via HTTP API
+ */
+async function queryMapping(mappingName: string, key: string): Promise<string | null> {
+  try {
+    const url = `${getApiBaseUrl()}/program/${config.aleo.programId}/mapping/${mappingName}/${key}`;
+    const response = await fetch(url);
+    if (response.ok) {
+      const text = await response.text();
+      return text.replace(/^"|"$/g, '').trim();
+    }
+    return null;
+  } catch (err) {
+    logger.error(`[Aleo] HTTP mapping query failed for ${mappingName}/${key}:`, err);
+    return null;
   }
 }
 
@@ -95,8 +161,11 @@ export async function issueBadgeOnChain(
   // Convert proof hash to field format
   const proofField = stringToField(proofHash);
   
+  const apiBase = getApiBaseUrl();
+  const broadcastUrl = `${apiBase}/transaction/broadcast`;
+  
   // Build the snarkos execute command
-  const command = `snarkos developer execute ${config.aleo.programId} issue_badge "${recipientAddress}" ${proofField}field ${expiresAtBlock}u32 --private-key ${config.aleo.issuerPrivateKey} --query ${config.aleo.rpcUrl} --broadcast ${config.aleo.rpcUrl}/testnet/transaction/broadcast --priority-fee 10000`;
+  const command = `snarkos developer execute ${config.aleo.programId} issue_badge "${recipientAddress}" ${proofField}field ${expiresAtBlock}u32 --private-key ${config.aleo.issuerPrivateKey} --query ${config.aleo.rpcUrl} --broadcast ${broadcastUrl} --priority-fee 10000`;
 
   const result = await executeAleoCli(command);
 
@@ -119,15 +188,14 @@ export async function issueBadgeOnChain(
 }
 
 /**
- * Check if a badge exists on chain
- * Queries the badge_registry mapping
+ * Check if a badge exists on chain via HTTP API
+ * Queries the bdg_reg mapping
  */
 export async function checkBadgeOnChain(badgeNonce: string): Promise<boolean> {
   try {
-    const command = `snarkos developer query ${config.aleo.programId} bdg_reg ${badgeNonce} --query ${config.aleo.rpcUrl}`;
-    const result = await executeAleoCli(command);
-    
-    return result.success && (result.output?.includes('BadgeData') ?? false);
+    const nonceKey = badgeNonce.endsWith('field') ? badgeNonce : `${badgeNonce}field`;
+    const result = await queryMapping('bdg_reg', nonceKey);
+    return result !== null && result !== 'null';
   } catch {
     return false;
   }
@@ -140,7 +208,9 @@ export async function checkBadgeOnChain(badgeNonce: string): Promise<boolean> {
 export async function initializeContract(adminAddress: string): Promise<ContractCallResult> {
   logger.info(`[Aleo] Initializing contract with admin: ${adminAddress}`);
 
-  const command = `snarkos developer execute ${config.aleo.programId} init "${adminAddress}" --private-key ${config.aleo.issuerPrivateKey} --query ${config.aleo.rpcUrl} --broadcast ${config.aleo.rpcUrl}/testnet/transaction/broadcast --priority-fee 10000`;
+  const apiBase = getApiBaseUrl();
+  const broadcastUrl = `${apiBase}/transaction/broadcast`;
+  const command = `snarkos developer execute ${config.aleo.programId} init "${adminAddress}" --private-key ${config.aleo.issuerPrivateKey} --query ${config.aleo.rpcUrl} --broadcast ${broadcastUrl} --priority-fee 10000`;
 
   return executeAleoCli(command);
 }
@@ -155,7 +225,9 @@ export async function registerIssuer(
   logger.info(`[Aleo] Registering issuer: ${issuerAddress}`);
 
   const nameField = stringToField(issuerName);
-  const command = `snarkos developer execute ${config.aleo.programId} reg_issuer "${issuerAddress}" ${nameField}field --private-key ${config.aleo.issuerPrivateKey} --query ${config.aleo.rpcUrl} --broadcast ${config.aleo.rpcUrl}/testnet/transaction/broadcast --priority-fee 10000`;
+  const apiBase = getApiBaseUrl();
+  const broadcastUrl = `${apiBase}/transaction/broadcast`;
+  const command = `snarkos developer execute ${config.aleo.programId} reg_issuer "${issuerAddress}" ${nameField}field --private-key ${config.aleo.issuerPrivateKey} --query ${config.aleo.rpcUrl} --broadcast ${broadcastUrl} --priority-fee 10000`;
 
   return executeAleoCli(command);
 }
@@ -184,11 +256,12 @@ function stringToField(input: string): string {
 }
 
 /**
- * Get current block height from Aleo network
+ * Get current block height from Aleo network via HTTP API
  */
 export async function getCurrentBlockHeight(): Promise<number> {
   try {
-    const response = await fetch(`${config.aleo.rpcUrl}/testnet/latest/height`);
+    const url = `${getApiBaseUrl()}/latest/height`;
+    const response = await fetch(url);
     const height = await response.json() as number | string;
     return typeof height === 'number' ? height : parseInt(String(height), 10);
   } catch (error) {
@@ -220,18 +293,23 @@ export async function checkAleoHealth(): Promise<{
   connected: boolean;
   blockHeight?: number;
   programDeployed?: boolean;
+  snarkosAvailable?: boolean;
 }> {
   try {
     const height = await getCurrentBlockHeight();
     
-    // Check if program is deployed
-    const programCheck = await fetch(`${config.aleo.rpcUrl}/testnet/program/${config.aleo.programId}`);
+    // Check if program is deployed via HTTP
+    const programCheck = await fetch(`${getApiBaseUrl()}/program/${config.aleo.programId}`);
     const programDeployed = programCheck.ok;
+    
+    // Check snarkos availability
+    const cliAvailable = await isSnarkosAvailable();
 
     return {
       connected: true,
       blockHeight: height,
       programDeployed,
+      snarkosAvailable: cliAvailable,
     };
   } catch {
     return {

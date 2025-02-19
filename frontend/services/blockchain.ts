@@ -12,12 +12,6 @@
 // Types
 // ============================================================================
 
-interface TransactionResult {
-  transactionId: string;
-  status: 'pending' | 'confirmed' | 'failed';
-  blockHeight?: number;
-}
-
 // Badge record structure (exported for potential future use)
 export interface BadgeRecord {
   owner: string;
@@ -120,7 +114,9 @@ class BlockchainService {
         `${this.apiEndpoint}/program/${PROGRAM_ID}/mapping/${mappingName}/${key}`
       );
       if (response.ok) {
-        return await response.text();
+        const raw = await response.text();
+        // Strip surrounding quotes from API response
+        return raw.replace(/^"|"$/g, '').trim();
       }
       return null;
     } catch (err) {
@@ -168,156 +164,193 @@ class BlockchainService {
   }
 
   // ===========================================================================
-  // Demo Mode Operations
+  // Parse Helpers for Aleo Struct Responses
   // ===========================================================================
 
   /**
-   * Issue a new SybilShield badge
-   * @param owner - The address of the badge owner
-   * @param proofHash - Hash of the verification proof
+   * Parse an Aleo struct response into key-value pairs
+   * Aleo returns: { id: 1u32, title: 12345field, ... }
    */
-  async issueBadge(owner: string, proofHash: string): Promise<TransactionResult> {
-    console.log(`[Blockchain] Issuing badge for ${owner} with proof hash ${proofHash}`);
-    
-    // In production, this would:
-    // 1. Use the wallet adapter to sign the transaction
-    // 2. Call the sybilshield_aio_v2.aleo/issue_badge transition
-    // 3. Wait for transaction confirmation
-    
-    // Demo mode: simulate transaction
-    await this.simulateDelay(2000);
-    
-    return {
-      transactionId: `at1${this.generateRandomHash(58)}`,
-      status: 'confirmed',
-      blockHeight: Math.floor(Math.random() * 1000000),
-    };
+  private parseAleoStruct(raw: string): Record<string, string> {
+    const result: Record<string, string> = {};
+    const inner = raw.replace(/^\s*\{/, '').replace(/\}\s*$/, '');
+    const lines = inner.split(/,\s*\n|\n|,(?=\s*\w+\s*:)/);
+    for (const line of lines) {
+      const trimmed = line.trim().replace(/,$/, '');
+      if (!trimmed) continue;
+      const colonIdx = trimmed.indexOf(':');
+      if (colonIdx === -1) continue;
+      const key = trimmed.slice(0, colonIdx).trim();
+      const value = trimmed.slice(colonIdx + 1).trim();
+      if (key) result[key] = value;
+    }
+    return result;
   }
 
   /**
-   * Verify a badge is valid
-   * @param owner - The badge owner's address
+   * Extract a numeric value from Aleo typed string (e.g., "123u32" → 123)
    */
-  async verifyBadge(owner: string): Promise<boolean> {
-    console.log(`[Blockchain] Verifying badge for ${owner}`);
-    
-    // In production, this would query the blockchain state
-    await this.simulateDelay(500);
-    
-    return true; // Demo: always return true
+  private parseAleoNumber(value: string): number {
+    if (!value) return 0;
+    const num = parseInt(value.replace(/u\d+$|i\d+$|field$/i, ''), 10);
+    return isNaN(num) ? 0 : num;
   }
 
   /**
-   * Renew an existing badge
-   * @param owner - The badge owner's address
+   * Parse Aleo boolean value
    */
-  async renewBadge(owner: string): Promise<TransactionResult> {
-    console.log(`[Blockchain] Renewing badge for ${owner}`);
-    
-    await this.simulateDelay(2000);
-    
-    return {
-      transactionId: `at1${this.generateRandomHash(58)}`,
-      status: 'confirmed',
-      blockHeight: Math.floor(Math.random() * 1000000),
-    };
+  private parseAleoBool(value: string): boolean {
+    return value?.trim() === 'true';
   }
 
   // ===========================================================================
-  // Governance Operations
+  // Real On-Chain Read Operations
   // ===========================================================================
 
   /**
-   * Create a new proposal
-   * @param proposer - The address of the proposer
-   * @param title - Proposal title
-   * @param description - Proposal description
-   * @param durationBlocks - How long voting is open (in blocks)
+   * Get proposal details from on-chain props mapping
    */
-  async createProposal(
-    _proposer: string,
-    title: string,
-    _description: string,
-    _durationBlocks: number
-  ): Promise<TransactionResult> {
-    console.log(`[Blockchain] Creating proposal: ${title}`);
-    
-    // In production, this would call sybilshield_aio_v2.aleo/create_proposal
-    await this.simulateDelay(2000);
-    
-    return {
-      transactionId: `at1${this.generateRandomHash(58)}`,
-      status: 'confirmed',
-      blockHeight: Math.floor(Math.random() * 1000000),
-    };
+  async getProposal(proposalId: number): Promise<ProposalRecord | null> {
+    try {
+      const raw = await this.getMapping('props', `${proposalId}u32`);
+      if (!raw || raw === 'null') return null;
+
+      const fields = this.parseAleoStruct(raw);
+      
+      return {
+        id: this.parseAleoNumber(fields['id'] || `${proposalId}`),
+        title: fields['title'] || '',
+        description: fields['desc'] || '',
+        proposer: (fields['proposer'] || '').replace(/"/g, ''),
+        createdAt: this.parseAleoNumber(fields['created'] || '0'),
+        endsAt: this.parseAleoNumber(fields['ends'] || '0'),
+        votesYes: this.parseAleoNumber(fields['yes'] || '0'),
+        votesNo: this.parseAleoNumber(fields['no'] || '0'),
+        executed: this.parseAleoBool(fields['exec'] || 'false'),
+        passed: this.parseAleoBool(fields['pass'] || 'false'),
+      };
+    } catch (err) {
+      console.error(`[Blockchain] Failed to get proposal ${proposalId}:`, err);
+      return null;
+    }
   }
 
   /**
-   * Cast a vote on a proposal
-   * @param voter - The voter's address
-   * @param proposalId - The proposal ID
-   * @param voteChoice - true for yes, false for no
-   * @param badgeNonce - The voter's badge nonce for privacy
+   * Check if a proposal is currently active
    */
-  async vote(
-    _voter: string,
-    proposalId: number,
-    voteChoice: boolean,
-    _badgeNonce: string
-  ): Promise<TransactionResult> {
-    console.log(`[Blockchain] Voting ${voteChoice ? 'Yes' : 'No'} on proposal ${proposalId}`);
-    
-    // In production, this would:
-    // 1. Generate a ZK proof that the voter has a valid badge
-    // 2. Call sybilshield_aio_v2.aleo/vote with the proof
-    // 3. The on-chain logic verifies the proof and records the vote
-    
-    await this.simulateDelay(3000);
-    
-    return {
-      transactionId: `at1${this.generateRandomHash(58)}`,
-      status: 'confirmed',
-      blockHeight: Math.floor(Math.random() * 1000000),
-    };
+  async isProposalActive(proposalId: number): Promise<boolean> {
+    try {
+      const result = await this.getMapping('prop_active', `${proposalId}u32`);
+      return result === 'true';
+    } catch {
+      return false;
+    }
   }
 
   /**
-   * Get proposal details
-   * @param proposalId - The proposal ID
+   * Check if a badge nonce is registered on-chain
    */
-  async getProposal(proposalId: number): Promise<{
-    id: number;
-    votesYes: number;
-    votesNo: number;
-    status: string;
-  } | null> {
-    console.log(`[Blockchain] Getting proposal ${proposalId}`);
-    
-    await this.simulateDelay(500);
-    
-    // Demo: return mock data
-    return {
-      id: proposalId,
-      votesYes: Math.floor(Math.random() * 100),
-      votesNo: Math.floor(Math.random() * 50),
-      status: 'active',
-    };
+  async isBadgeRegistered(badgeNonce: string): Promise<boolean> {
+    try {
+      const nonceKey = badgeNonce.endsWith('field') ? badgeNonce : `${badgeNonce}field`;
+      const result = await this.getMapping('bdg_reg', nonceKey);
+      return result !== null && result !== 'null';
+    } catch {
+      return false;
+    }
   }
 
-  // ===========================================================================
-  // Private Helpers
-  // ===========================================================================
-
-  private async simulateDelay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  /**
+   * Check if a badge has been revoked
+   */
+  async isBadgeRevoked(badgeNonce: string): Promise<boolean> {
+    try {
+      const nonceKey = badgeNonce.endsWith('field') ? badgeNonce : `${badgeNonce}field`;
+      const result = await this.getMapping('bdg_revoked', nonceKey);
+      return result === 'true';
+    } catch {
+      return false;
+    }
   }
 
-  private generateRandomHash(length: number): string {
-    const chars = '0123456789abcdefghijklmnopqrstuvwxyz';
-    return Array.from(
-      { length }, 
-      () => chars[Math.floor(Math.random() * chars.length)]
-    ).join('');
+  /**
+   * Get vote tally for a proposal
+   * The contract stores: yes_count * 1000000 + no_count in vote_tally mapping as a field
+   */
+  async getVoteTally(proposalId: number): Promise<{ yes: number; no: number }> {
+    try {
+      const raw = await this.getMapping('vote_tally', `${proposalId}u32`);
+      if (!raw || raw === 'null') return { yes: 0, no: 0 };
+
+      // vote_tally stores field values: "12345field"
+      const tallyStr = raw.replace(/field$/i, '');
+      const tally = parseInt(tallyStr, 10);
+      if (isNaN(tally)) return { yes: 0, no: 0 };
+
+      return {
+        yes: Math.floor(tally / 1000000),
+        no: tally % 1000000,
+      };
+    } catch {
+      return { yes: 0, no: 0 };
+    }
+  }
+
+  /**
+   * Get all proposals by iterating from 1 to prop_cnt
+   */
+  async getAllProposals(): Promise<ProposalRecord[]> {
+    const count = await this.getProposalCount();
+    const proposals: ProposalRecord[] = [];
+
+    for (let i = 1; i <= count; i++) {
+      try {
+        const proposal = await this.getProposal(i);
+        if (proposal) proposals.push(proposal);
+      } catch (e) {
+        console.warn(`[Blockchain] Skipping proposal ${i}:`, e);
+      }
+    }
+
+    return proposals;
+  }
+
+  /**
+   * Check if the program is deployed on the network
+   */
+  async isProgramDeployed(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.apiEndpoint}/program/${PROGRAM_ID}`);
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Check if a vote nullifier exists (i.e., user already voted on this proposal)
+   */
+  async hasVoteNullifier(nullifierField: string): Promise<boolean> {
+    try {
+      const key = nullifierField.endsWith('field') ? nullifierField : `${nullifierField}field`;
+      const result = await this.getMapping('vote_null', key);
+      return result === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Check if a proof hash has already been used
+   */
+  async isProofUsed(proofHashField: string): Promise<boolean> {
+    try {
+      const key = proofHashField.endsWith('field') ? proofHashField : `${proofHashField}field`;
+      const result = await this.getMapping('proof_used', key);
+      return result === 'true';
+    } catch {
+      return false;
+    }
   }
 }
 

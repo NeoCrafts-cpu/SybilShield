@@ -74,20 +74,18 @@ class ApiClient {
   // ===========================================================================
 
   async getHealth(): Promise<HealthResponse> {
-    // For demo mode, return mock health status
     try {
       const response = await this.client.get('/health');
-      return response.data;
+      return response.data.data || response.data;
     } catch {
-      // Return mock health for demo
       return {
-        status: 'ok',
+        status: 'error',
         timestamp: Date.now(),
         version: '1.0.0',
         services: {
-          aleo: 'connected',
-          poh: 'connected',
-          worldcoin: 'connected',
+          aleo: 'disconnected',
+          poh: 'disconnected',
+          worldcoin: 'disconnected',
         },
       };
     }
@@ -98,63 +96,28 @@ class ApiClient {
   // ===========================================================================
 
   async verifyPoH(profileUrl: string, address: string): Promise<VerificationResponse> {
-    try {
-      const response = await this.client.post('/verify/proof-of-humanity', {
-        profile_url: profileUrl,
-        address,
-      });
-      return response.data;
-    } catch {
-      // Return mock verification for demo
-      return {
-        verification_id: `ver_poh_${Math.random().toString(36).substring(2, 15)}`,
-        status: 'verified',
-        proof_hash: `hash_${Math.random().toString(36).substring(2, 15)}`,
-        expires_at: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
-        provider: 'proof_of_humanity',
-        message: 'Identity verified successfully (Demo Mode)',
-      };
-    }
+    const response = await this.client.post('/verify/proof-of-humanity', {
+      poh_profile_url: profileUrl,
+      address,
+    });
+    // Handle nested response structure from relayer
+    return response.data.data || response.data;
   }
 
   async verifyWorldcoin(token: string, address: string): Promise<VerificationResponse> {
-    try {
-      const response = await this.client.post('/verify/worldcoin', {
-        token,
-        address,
-      });
-      return response.data;
-    } catch {
-      // Return mock verification for demo
-      return {
-        verification_id: `ver_wc_${Math.random().toString(36).substring(2, 15)}`,
-        status: 'verified',
-        proof_hash: `hash_${Math.random().toString(36).substring(2, 15)}`,
-        expires_at: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
-        provider: 'worldcoin',
-        message: 'Identity verified successfully (Demo Mode)',
-      };
-    }
+    const response = await this.client.post('/verify/worldcoin', {
+      worldcoin_token: token,
+      address,
+    });
+    return response.data.data || response.data;
   }
 
   async verifyBrightID(contextId: string, address: string): Promise<VerificationResponse> {
-    try {
-      const response = await this.client.post('/verify/brightid', {
-        context_id: contextId,
-        address,
-      });
-      return response.data;
-    } catch {
-      // Return mock verification for demo
-      return {
-        verification_id: `ver_bid_${Math.random().toString(36).substring(2, 15)}`,
-        status: 'verified',
-        proof_hash: `hash_${Math.random().toString(36).substring(2, 15)}`,
-        expires_at: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
-        provider: 'brightid',
-        message: 'Identity verified successfully via BrightID (Demo Mode)',
-      };
-    }
+    const response = await this.client.post('/verify/brightid', {
+      context_id: contextId,
+      address,
+    });
+    return response.data.data || response.data;
   }
 
   async verifyLiveness(proofHash: string, address: string): Promise<VerificationResponse> {
@@ -182,11 +145,11 @@ class ApiClient {
       return response.data.data || response.data;
     } catch (error) {
       console.error('getBadgeStatus error:', error);
-      // Return mock status for demo (no badge by default)
+      // Return no-badge status if relayer is unavailable
       return {
         has_badge: false,
         badge_status: 'none',
-        message: 'No badge found for this address (Demo Mode)',
+        message: 'Could not check badge status - relayer unavailable',
       };
     }
   }
@@ -211,18 +174,8 @@ class ApiClient {
   }
 
   async renewBadge(address: string): Promise<ApiResponse<{ transaction_id: string }>> {
-    try {
-      const response = await this.client.post('/badge/renew', { address });
-      return response.data;
-    } catch {
-      // Return mock success for demo
-      return {
-        success: true,
-        data: {
-          transaction_id: `tx_${Math.random().toString(36).substring(2, 15)}`,
-        },
-      };
-    }
+    const response = await this.client.post('/badge/renew', { address });
+    return response.data;
   }
 }
 

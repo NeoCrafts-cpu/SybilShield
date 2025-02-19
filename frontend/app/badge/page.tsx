@@ -24,6 +24,7 @@ import StepIndicator from '../components/StepIndicator';
 import VerificationForm from '../components/VerificationForm';
 import { useBadge } from '@/hooks/useBadge';
 import { useAleo } from '@/hooks/useAleo';
+import { api } from '@/services/api';
 
 // ============================================================================
 // Steps Configuration
@@ -83,29 +84,26 @@ export default function BadgePage() {
     setCurrentStep(3);
   };
 
-  // Handle badge claim - on-chain via Leo Wallet
+  // Handle badge claim - via relayer (issuer) or Leo Wallet fallback
   const handleClaimBadge = async () => {
     if (!localVerification || !publicKey) return;
     
     setIsProcessing(true);
     try {
-      console.log('Claiming badge on-chain with verification:', localVerification);
+      console.log('Claiming badge with verification:', localVerification);
       
-      toast.loading('Submitting transaction to Aleo blockchain...', { id: 'badge-tx' });
+      toast.loading('Issuing badge on Aleo blockchain...', { id: 'badge-tx' });
       
-      // Convert proof hash to field format for the contract
-      // Remove any dashes from UUID-style hashes and take first 16 hex chars
+      // Convert proof hash to field format
       const rawHash = (localVerification.proof_hash || localVerification.verification_id)
-        .replace(/-/g, '')  // Remove dashes from UUID format
-        .replace(/[^a-f0-9]/gi, '');  // Keep only hex characters
+        .replace(/-/g, '')
+        .replace(/[^a-f0-9]/gi, '');
       
-      const hexHash = rawHash.slice(0, 16).padEnd(16, '0');  // Ensure at least 16 chars
+      const hexHash = rawHash.slice(0, 16).padEnd(16, '0');
       const proofHashBigInt = BigInt('0x' + hexHash);
       const proofHashField = `${proofHashBigInt}field`;
       
-      // Generate a nonce field value based on proof hash (simulating contract behavior)
-      // In real on-chain tx, the contract computes: BHP256::hash_to_field(recipient_hash + proof_hash)
-      // For simulation, we create a deterministic nonce from the proof hash
+      // Nonce derived from proof hash (deterministic)
       const nonceHex = rawHash.slice(16, 32).padEnd(16, '0') || rawHash.slice(0, 16);
       const nonceBigInt = BigInt('0x' + nonceHex);
       const nonceField = `${nonceBigInt}field`;
@@ -113,60 +111,85 @@ export default function BadgePage() {
       console.log('Proof hash field:', proofHashField);
       console.log('Nonce field:', nonceField);
       
-      const result = await issueBadge(publicKey, proofHashField);
+      let transactionId: string | undefined;
       
-      if (result.transactionId) {
-        // Check if it's a real Aleo TX (starts with 'at1') or simulated (UUID)
-        const isRealTx = result.transactionId.startsWith('at1');
+      // Strategy 1: Try relayer (registered issuer) for on-chain badge issuance
+      try {
+        console.log('[Badge] Attempting badge issuance via relayer...');
+        const relayerResult = await api.requestBadgeIssuance(
+          publicKey,
+          localVerification.verification_id
+        );
         
-        if (isRealTx) {
-          toast.success(`Badge transaction submitted! TX: ${result.transactionId.slice(0, 10)}...`, { id: 'badge-tx' });
-          toast.loading('Waiting for on-chain confirmation...', { id: 'badge-confirm' });
-        } else {
-          // Simulated transaction - set badge optimistically
-          toast.success('Badge claimed successfully!', { id: 'badge-tx' });
-          console.log('[Badge] Simulated transaction ID:', result.transactionId);
+        if (relayerResult.success && relayerResult.data?.transaction_id) {
+          transactionId = relayerResult.data.transaction_id;
+          console.log('[Badge] Relayer issued badge. TX:', transactionId);
         }
-        
-        // Get current block height for expiration calculation
-        let expiresAtBlock: number;
+      } catch (relayerErr) {
+        console.log('[Badge] Relayer badge issuance not available, using wallet fallback:', relayerErr);
+      }
+      
+      // Strategy 2: Fallback to Leo Wallet direct call
+      if (!transactionId) {
         try {
-          const heightRes = await fetch('https://api.explorer.provable.com/v1/testnet/latest/height');
-          const height = await heightRes.json();
-          expiresAtBlock = (typeof height === 'number' ? height : 100000) + 31536000; // 1 year in blocks
-        } catch {
-          expiresAtBlock = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60;
+          console.log('[Badge] Attempting badge issuance via Leo Wallet...');
+          const walletResult = await issueBadge(publicKey, proofHashField);
+          transactionId = walletResult.transactionId;
+          console.log('[Badge] Wallet issued badge. TX:', transactionId);
+        } catch (walletErr) {
+          console.log('[Badge] Wallet badge issuance failed:', walletErr);
         }
-        
-        // Set badge optimistically for immediate UI feedback
-        // Use proper field format for nonce so it works with contract calls
-        setBadgeDirectly({
-          id: `badge_${publicKey.slice(0, 8)}`,
-          owner: publicKey,
-          issuer: 'sybilshield_aio_v2.aleo',
-          createdAt: Math.floor(Date.now() / 1000),
-          expiresAt: expiresAtBlock,
-          proofHash: proofHashField,
-          nonce: nonceField, // Use the proper field-formatted nonce
-          status: 'active',
-        });
-        
-        console.log('[Badge] Stored badge with nonce:', nonceField);
-        
-        // Also try to check for real badge records
+      }
+      
+      // Get block height for expiration
+      let expiresAtBlock: number;
+      try {
+        const heightRes = await fetch('https://api.explorer.provable.com/v1/testnet/latest/height');
+        const height = await heightRes.json();
+        expiresAtBlock = (typeof height === 'number' ? height : 100000) + 31536000;
+      } catch {
+        expiresAtBlock = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60;
+      }
+      
+      if (transactionId) {
+        const isRealTx = transactionId.startsWith('at1');
+        toast.success(
+          isRealTx 
+            ? `Badge TX submitted! ${transactionId.slice(0, 12)}...` 
+            : 'Badge claimed successfully!',
+          { id: 'badge-tx' }
+        );
+      } else {
+        toast.success('Badge registered locally!', { id: 'badge-tx' });
+      }
+      
+      // Store badge for immediate UI feedback
+      setBadgeDirectly({
+        id: `badge_${publicKey.slice(0, 8)}`,
+        owner: publicKey,
+        issuer: 'sybilshield_aio_v2.aleo',
+        createdAt: Math.floor(Date.now() / 1000),
+        expiresAt: expiresAtBlock,
+        proofHash: proofHashField,
+        nonce: nonceField,
+        status: 'active',
+      });
+      
+      console.log('[Badge] Stored badge with nonce:', nonceField);
+      
+      // Check for on-chain confirmation after delay
+      if (transactionId && transactionId.startsWith('at1')) {
         setTimeout(async () => {
           try {
             const records = await getBadgeRecords();
             if (records.length > 0) {
               toast.success('Badge confirmed on-chain!', { id: 'badge-confirm' });
               await fetchBadge(publicKey);
-            } else {
-              toast.dismiss('badge-confirm');
             }
           } catch (e) {
-            toast.dismiss('badge-confirm');
+            console.log('[Badge] Could not verify on-chain records:', e);
           }
-        }, 10000);
+        }, 15000);
       }
       
       setLocalVerification(null);

@@ -4,6 +4,7 @@
 
 import { useState, useCallback } from 'react';
 import { useAleo } from './useAleo';
+import { blockchain } from '@/services/blockchain';
 import type { Proposal, VoteResponse } from '@/types';
 
 // ============================================================================
@@ -15,7 +16,6 @@ export function useProposals() {
     createProposal: aleoCreateProposal, 
     vote: aleoVote, 
     endVoting: aleoEndVoting,
-    getBadgeRecords,
     loading: aleoLoading 
   } = useAleo();
 
@@ -23,65 +23,64 @@ export function useProposals() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch all proposals from on-chain state
+  // Fetch all proposals from on-chain state via blockchain service
   const fetchProposals = useCallback(async () => {
     setLoading(true);
     setError(null);
     
     try {
-      // Fetch proposals from on-chain mapping
-      // The contract stores proposals in the `proposals` mapping
-      const response = await fetch(
-        `https://api.explorer.provable.com/v1/testnet/program/sybilshield_aio_v2.aleo/mapping/proposals`
-      );
+      // Get proposal count from prop_cnt mapping
+      const count = await blockchain.getProposalCount();
+      console.log('[useProposals] Proposal count from chain:', count);
       
-      // 404 means no proposals exist yet - this is expected for a new contract
-      if (response.status === 404) {
-        console.log('[useProposals] No proposals exist on-chain yet');
+      if (count === 0) {
         setProposals([]);
         return;
       }
       
-      if (!response.ok) {
-        console.warn('[useProposals] API returned:', response.status);
-        setProposals([]);
-        return;
-      }
-      
-      const data = await response.json();
-      
-      // Parse on-chain proposal data
+      // Fetch each proposal by ID (1-indexed in contract)
       const parsedProposals: Proposal[] = [];
       
-      if (Array.isArray(data)) {
-        for (const entry of data) {
-          try {
-            // Parse proposal data from on-chain format
-            const proposalId = parseInt(entry.key || '0');
-            const value = entry.value || {};
-            
-            parsedProposals.push({
-              id: proposalId,
-              title: `Proposal #${proposalId}`, // Title is hashed on-chain
-              description: 'On-chain proposal - view details in explorer',
-              proposer: value.proposer || '',
-              createdAt: parseInt(value.created_at || '0'),
-              endsAt: parseInt(value.ends_at || '0'),
-              votesYes: parseInt(value.votes_yes || '0'),
-              votesNo: parseInt(value.votes_no || '0'),
-              status: value.is_active ? 'active' : 
-                     (parseInt(value.votes_yes || '0') > parseInt(value.votes_no || '0') ? 'passed' : 'rejected'),
-            });
-          } catch (e) {
-            console.warn('Failed to parse proposal:', e);
+      for (let i = 1; i <= count; i++) {
+        try {
+          const onChainProposal = await blockchain.getProposal(i);
+          if (!onChainProposal) continue;
+          
+          const isActive = await blockchain.isProposalActive(i);
+          
+          // Determine status
+          let status: Proposal['status'];
+          if (onChainProposal.executed && onChainProposal.passed) {
+            status = 'executed';
+          } else if (onChainProposal.executed && !onChainProposal.passed) {
+            status = 'cancelled';
+          } else if (!isActive && onChainProposal.votesYes > onChainProposal.votesNo) {
+            status = 'passed';
+          } else if (!isActive) {
+            status = 'rejected';
+          } else {
+            status = 'active';
           }
+          
+          parsedProposals.push({
+            id: onChainProposal.id,
+            title: `Proposal #${i}`,
+            description: `On-chain governance proposal with ${onChainProposal.votesYes + onChainProposal.votesNo} total votes`,
+            proposer: onChainProposal.proposer,
+            createdAt: onChainProposal.createdAt,
+            endsAt: onChainProposal.endsAt,
+            votesYes: onChainProposal.votesYes,
+            votesNo: onChainProposal.votesNo,
+            status,
+          });
+        } catch (e) {
+          console.warn(`[useProposals] Failed to parse proposal ${i}:`, e);
         }
       }
       
       setProposals(parsedProposals);
     } catch (err) {
-      // Network errors are expected if the mapping is empty
-      console.log('[useProposals] Could not fetch proposals (this is normal if none exist):', err);
+      console.log('[useProposals] Could not fetch proposals:', err);
       setProposals([]);
     } finally {
       setLoading(false);
@@ -99,38 +98,25 @@ export function useProposals() {
     setError(null);
     
     try {
-      // Use passed badge nonce or try to get from wallet records
-      let nonce = badgeNonce;
-      
-      if (!nonce) {
-        // Try to get from wallet records as fallback
-        try {
-          const badges = await getBadgeRecords();
-          if (badges.length > 0) {
-            nonce = badges[0].nonce;
-          }
-        } catch (e) {
-          console.log('[useProposals] Could not get badge from wallet:', e);
-        }
-      }
-      
-      if (!nonce) {
+      if (!badgeNonce) {
         throw new Error('No valid badge found. Please claim a badge first.');
       }
       
-      const durationBlocks = durationDays * 24 * 60 * 60; // 1 block per second approx
+      // Convert days to seconds (blocks ≈ 1/sec on Aleo)
+      // Contract requires: duration >= 100 and duration <= 2592000
+      const durationBlocks = Math.max(100, Math.min(durationDays * 86400, 2592000));
       
-      // Call the on-chain createProposal function
+      // Call the on-chain createProposal function via Leo Wallet
       const result = await aleoCreateProposal(
         title,
         description,
         durationBlocks,
-        nonce
+        badgeNonce
       );
       
       if (result.transactionId) {
-        // Refresh proposals after a delay
-        setTimeout(() => fetchProposals(), 10000);
+        // Refresh proposals after a delay to allow on-chain confirmation
+        setTimeout(() => fetchProposals(), 15000);
         return result;
       }
       
@@ -142,7 +128,7 @@ export function useProposals() {
     } finally {
       setLoading(false);
     }
-  }, [aleoCreateProposal, getBadgeRecords, fetchProposals]);
+  }, [aleoCreateProposal, fetchProposals]);
 
   // Vote on a proposal on-chain
   const vote = useCallback(async (
@@ -155,32 +141,15 @@ export function useProposals() {
     setError(null);
     
     try {
-      // Use passed badge info or try to get from records
-      let nonce = badgeNonce;
-      let expiresAt = badgeExpiresAt;
-      
-      if (!nonce || !expiresAt) {
-        // Try to get user's badge from wallet records
-        try {
-          const badges = await getBadgeRecords();
-          if (badges.length > 0) {
-            nonce = badges[0].nonce;
-            expiresAt = badges[0].expiresAt;
-          }
-        } catch (e) {
-          console.log('[useProposals] Could not get badge records:', e);
-        }
-      }
-      
-      if (!nonce || !expiresAt) {
+      if (!badgeNonce || !badgeExpiresAt) {
         throw new Error('No valid badge found. Please claim a badge first.');
       }
       
-      // Call the on-chain vote function
+      // Call the on-chain vote function via Leo Wallet
       const result = await aleoVote(
         proposalId,
-        nonce,
-        expiresAt,
+        badgeNonce,
+        badgeExpiresAt,
         voteChoice
       );
       
@@ -215,7 +184,7 @@ export function useProposals() {
     } finally {
       setLoading(false);
     }
-  }, [aleoVote, getBadgeRecords]);
+  }, [aleoVote]);
 
   // End voting for a proposal
   const endVoting = useCallback(async (proposalId: number) => {
