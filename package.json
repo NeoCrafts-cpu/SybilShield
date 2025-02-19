@@ -42,7 +42,7 @@
     "frontend:build": "pnpm --filter frontend build",
     "frontend:start": "pnpm --filter frontend start",
     "frontend:test": "pnpm --filter frontend test",
-    "prepare": "husky install"
+    "prepare": "node -e \"try{require('husky').install()}catch(e){}\""
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
