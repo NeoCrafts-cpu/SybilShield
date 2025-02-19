@@ -23,7 +23,7 @@ const envSchema = z.object({
 
   // Aleo Blockchain
   ALEO_RPC_URL: z.string().url().default('https://api.explorer.provable.com/v1'),
-  ISSUER_PRIVATE_KEY: z.string().min(1, 'ISSUER_PRIVATE_KEY is required'),
+  ISSUER_PRIVATE_KEY: z.string().optional().default(''),
   ISSUER_ADDRESS: z.string().optional(),
 
   // Proof of Humanity

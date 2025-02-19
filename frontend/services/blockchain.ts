@@ -138,8 +138,9 @@ class BlockchainService {
    */
   async getBadgeCount(): Promise<number> {
     const result = await this.getMapping('bdg_count', '0u8');
-    if (result) {
-      return parseInt(result.replace('u32', ''), 10);
+    if (result && result !== 'null') {
+      const num = parseInt(result.replace(/u\d+$/i, ''), 10);
+      return isNaN(num) ? 0 : num;
     }
     return 0;
   }
@@ -149,8 +150,9 @@ class BlockchainService {
    */
   async getProposalCount(): Promise<number> {
     const result = await this.getMapping('prop_cnt', '0u8');
-    if (result) {
-      return parseInt(result.replace('u32', ''), 10);
+    if (result && result !== 'null') {
+      const num = parseInt(result.replace(/u\d+$/i, ''), 10);
+      return isNaN(num) ? 0 : num;
     }
     return 0;
   }
