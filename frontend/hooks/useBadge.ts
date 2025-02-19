@@ -16,12 +16,18 @@ function getStoredBadge(): SybilBadge | null {
     const stored = localStorage.getItem(BADGE_STORAGE_KEY);
     if (stored) {
       const badge = JSON.parse(stored) as SybilBadge;
-      // Check if badge is still valid (not expired)
-      if (badge.expiresAt > Math.floor(Date.now() / 1000)) {
-        return badge;
+      // expiresAt may be a block height (small number, <1B) or Unix timestamp (>1B)
+      // Block heights on Aleo are much smaller than Unix timestamps (~1.7B)
+      // Only do client-side expiration check for values that look like Unix timestamps
+      const now = Math.floor(Date.now() / 1000);
+      const looksLikeTimestamp = badge.expiresAt > 1_000_000_000;
+      if (looksLikeTimestamp && badge.expiresAt < now) {
+        // Expired Unix timestamp - remove badge
+        localStorage.removeItem(BADGE_STORAGE_KEY);
+        return null;
       }
-      // Remove expired badge
-      localStorage.removeItem(BADGE_STORAGE_KEY);
+      // For block heights, trust the on-chain contract to handle expiration
+      return badge;
     }
   } catch (e) {
     console.error('[useBadge] Error reading from localStorage:', e);
@@ -106,7 +112,10 @@ export function useBadge() {
             expiresAt: badgeRecord.expiresAt || Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
             proofHash: badgeRecord.proofHash || '',
             nonce: badgeRecord.nonce || '',
-            status: badgeRecord.expiresAt > Math.floor(Date.now() / 1000) ? 'active' : 'expired',
+            // expiresAt may be block height (<1B) or Unix timestamp (>1B)
+            status: badgeRecord.expiresAt > 1_000_000_000
+              ? (badgeRecord.expiresAt > Math.floor(Date.now() / 1000) ? 'active' : 'expired')
+              : 'active', // Block heights: trust on-chain contract for expiration
           };
           console.log('[useBadge] Setting badge from on-chain record:', badgeData);
           setBadge(badgeData);

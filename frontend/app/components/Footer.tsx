@@ -57,9 +57,9 @@ const footerLinks = [
   {
     title: 'Resources',
     links: [
-      { name: 'Documentation', href: '/docs' },
-      { name: 'API Reference', href: '/api-docs' },
-      { name: 'Privacy Model', href: '/privacy' },
+      { name: 'Documentation', href: 'https://github.com/NeoCrafts-cpu/SybilShield#readme' },
+      { name: 'API Reference', href: 'https://github.com/NeoCrafts-cpu/SybilShield#api-reference' },
+      { name: 'Privacy Model', href: '/#how-it-works' },
     ],
   },
   {
@@ -154,10 +154,10 @@ export default function Footer() {
             </div>
             
             <div className="flex items-center gap-4 text-sm text-dark-500">
-              <Link href="/privacy" className="hover:text-dark-300">
+              <Link href="/#how-it-works" className="hover:text-dark-300">
                 Privacy Policy
               </Link>
-              <Link href="/terms" className="hover:text-dark-300">
+              <Link href="https://github.com/NeoCrafts-cpu/SybilShield" className="hover:text-dark-300">
                 Terms
               </Link>
             </div>
