@@ -1,0 +1,303 @@
+# ============================================
+# SybilShield CI/CD Pipeline
+# ============================================
+# This workflow runs on every push and PR to main
+# It builds Leo contracts, runs tests, and validates
+# the frontend and relayer applications.
+
+name: SybilShield CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20.x'
+  PNPM_VERSION: '8.15.0'
+  LEO_VERSION: '3.4.0'
+
+jobs:
+  # ========================================
+  # Leo Contract Build & Test
+  # ========================================
+  leo-contracts:
+    name: Leo Contracts
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache Leo
+        uses: actions/cache@v4
+        id: cache-leo
+        with:
+          path: ~/.leo
+          key: leo-${{ env.LEO_VERSION }}-${{ runner.os }}
+          restore-keys: |
+            leo-${{ env.LEO_VERSION }}-
+
+      - name: Install Rust
+        if: steps.cache-leo.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-action@stable
+
+      - name: Install Leo
+        if: steps.cache-leo.outputs.cache-hit != 'true'
+        run: |
+          cargo install leo-lang@${{ env.LEO_VERSION }}
+          leo --version
+
+      - name: Add Leo to PATH
+        run: |
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Build Leo contracts
+        working-directory: ./contracts
+        run: |
+          leo build
+          echo "✅ Leo contracts built successfully"
+
+      - name: Run Leo tests
+        working-directory: ./contracts
+        run: |
+          leo test
+          echo "✅ Leo tests passed"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: leo-build
+          path: contracts/build/
+          retention-days: 7
+
+  # ========================================
+  # Relayer Build & Test
+  # ========================================
+  relayer:
+    name: Relayer Backend
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript type check
+        working-directory: ./relayer
+        run: pnpm typecheck
+
+      - name: Lint
+        working-directory: ./relayer
+        run: pnpm lint
+
+      - name: Build relayer
+        working-directory: ./relayer
+        run: pnpm build
+
+      - name: Run tests
+        working-directory: ./relayer
+        run: pnpm test -- --coverage
+        env:
+          NODE_ENV: test
+          POH_API_KEY: test-key
+          WORLDCOIN_API_KEY: test-key
+          ISSUER_PRIVATE_KEY: APrivateKey1zkp8CZNn3yeCseEtxuVPbDCwSyhGW6yZKUYKfgXmcpoGPWH
+          ALEO_RPC_URL: https://api.explorer.provable.com/v2
+          PORT: 5001
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./relayer/coverage/lcov.info
+          flags: relayer
+          fail_ci_if_error: false
+
+  # ========================================
+  # Frontend Build & Test
+  # ========================================
+  frontend:
+    name: Frontend Application
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript type check
+        working-directory: ./frontend
+        run: pnpm typecheck
+
+      - name: Lint
+        working-directory: ./frontend
+        run: pnpm lint
+
+      - name: Build frontend
+        working-directory: ./frontend
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_RELAYER_URL: http://localhost:5000
+          NEXT_PUBLIC_ALEO_NETWORK: testnet
+
+      - name: Run tests
+        working-directory: ./frontend
+        run: pnpm test -- --coverage --passWithNoTests
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./frontend/coverage/lcov.info
+          flags: frontend
+          fail_ci_if_error: false
+
+  # ========================================
+  # Integration Tests
+  # ========================================
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [relayer, frontend]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build all packages
+        run: pnpm build
+
+      - name: Start relayer (background)
+        working-directory: ./relayer
+        run: |
+          pnpm start &
+          sleep 5
+        env:
+          NODE_ENV: test
+          POH_API_KEY: test-key
+          WORLDCOIN_API_KEY: test-key
+          ISSUER_PRIVATE_KEY: APrivateKey1zkp8CZNn3yeCseEtxuVPbDCwSyhGW6yZKUYKfgXmcpoGPWH
+          ALEO_RPC_URL: https://api.explorer.provable.com/v2
+          PORT: 5000
+
+      - name: Health check
+        run: |
+          curl -f http://localhost:5000/health || exit 1
+          echo "✅ Relayer is healthy"
+
+  # ========================================
+  # Security Audit
+  # ========================================
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run pnpm audit
+        run: pnpm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Check for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD
+        continue-on-error: true
+
+  # ========================================
+  # Deploy to Testnet (Manual)
+  # ========================================
+  deploy-testnet:
+    name: Deploy to Aleo Testnet
+    runs-on: ubuntu-latest
+    needs: [leo-contracts, relayer, frontend]
+    if: github.event_name == 'workflow_dispatch'
+    environment: testnet
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache Leo
+        uses: actions/cache@v4
+        id: cache-leo
+        with:
+          path: ~/.leo
+          key: leo-${{ env.LEO_VERSION }}-${{ runner.os }}
+
+      - name: Install Leo
+        if: steps.cache-leo.outputs.cache-hit != 'true'
+        run: |
+          cargo install leo-lang@${{ env.LEO_VERSION }}
+
+      - name: Add Leo to PATH
+        run: |
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Deploy to testnet
+        working-directory: ./contracts
+        run: |
+          echo "🚀 Deploying to Aleo testnet..."
+          # leo deploy --network testnet
+          echo "⚠️ Deployment requires ALEO_PRIVATE_KEY secret"
+        env:
+          ALEO_PRIVATE_KEY: ${{ secrets.ALEO_PRIVATE_KEY }}

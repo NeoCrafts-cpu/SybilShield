@@ -1,0 +1,9 @@
+{
+  "program": "sybilshield_aio_v2.aleo",
+  "version": "1.0.0",
+  "description": "SybilShield All-in-One v2 - Badge + Governance",
+  "license": "MIT",
+  "leo": "3.4.0",
+  "dependencies": null,
+  "dev_dependencies": null
+}

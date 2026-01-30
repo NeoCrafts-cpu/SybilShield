@@ -1,0 +1,10 @@
+{
+  "program": "sybilshield_aio_v2.aleo",
+  "version": "1.0.0",
+  "description": "SybilShield All-in-One: Privacy-preserving sybil resistance for Aleo DAOs",
+  "license": "MIT",
+  "leo": "3.4.0",
+  "deployTxId": "at10376kkr45n7k6pat7jt2g9knsy7wv4uyvs59glz0j2239snxaqyqjred3d",
+  "dependencies": null,
+  "dev_dependencies": null
+}

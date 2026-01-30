@@ -1,0 +1,64 @@
+{
+  "name": "sybilshield",
+  "version": "1.0.0",
+  "description": "Privacy-focused, zero-knowledge proof-based system for fair DAO governance on Aleo",
+  "private": true,
+  "author": "SybilShield Team",
+  "license": "MIT",
+  "keywords": [
+    "aleo",
+    "zk-proofs",
+    "dao",
+    "governance",
+    "privacy",
+    "sybil-resistance",
+    "web3"
+  ],
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "packageManager": "pnpm@8.15.0",
+  "workspaces": [
+    "frontend",
+    "relayer"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "typecheck": "turbo run typecheck",
+    "contracts:build": "cd contracts && leo build",
+    "contracts:test": "cd contracts && leo test",
+    "contracts:deploy": "cd contracts && leo deploy --network testnet",
+    "relayer:dev": "pnpm --filter relayer dev",
+    "relayer:build": "pnpm --filter relayer build",
+    "relayer:start": "pnpm --filter relayer start",
+    "relayer:test": "pnpm --filter relayer test",
+    "frontend:dev": "pnpm --filter frontend dev",
+    "frontend:build": "pnpm --filter frontend build",
+    "frontend:start": "pnpm --filter frontend start",
+    "frontend:test": "pnpm --filter frontend test",
+    "prepare": "husky install"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "husky": "^9.0.0",
+    "lint-staged": "^15.2.0",
+    "prettier": "^3.2.0",
+    "turbo": "^2.0.0",
+    "typescript": "^5.3.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md}": [
+      "prettier --write"
+    ]
+  }
+}

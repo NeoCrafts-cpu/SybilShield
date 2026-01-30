@@ -1,0 +1,15 @@
+[package]
+name = "sybilshield"
+version = "1.0.0"
+description = "Privacy-focused Sybil-resistant badge system for fair DAO governance"
+license = "MIT"
+
+[dependencies]
+
+[dev-dependencies]
+
+[build]
+directory = "build"
+
+[network]
+network = "testnet"

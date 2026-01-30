@@ -1,0 +1,7 @@
+[project]
+name = "sybilshield_aio_v2"
+version = "0.1.0"
+description = "SybilShield All-in-One v2 - Badge + Governance"
+license = "MIT"
+
+[dependencies]
